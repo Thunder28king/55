@@ -2,11 +2,17 @@ from flask import Flask, request, jsonify
 import pickle
 import pandas as pd
 from datetime import datetime
+import traceback
 
 # Load the trained model
 MODEL_PATH = 'retrained_model_with_timestamps.pkl'
-with open(MODEL_PATH, 'rb') as model_file:
-    model = pickle.load(model_file)
+try:
+    with open(MODEL_PATH, 'rb') as model_file:
+        model = pickle.load(model_file)
+    print("✅ Model loaded successfully!")
+except Exception as e:
+    print("❌ Failed to load model:", e)
+    raise e
 
 # Feature Engineering Functions
 def calculate_entropy(text):
@@ -16,51 +22,65 @@ def calculate_entropy(text):
 # Initialize Flask app
 app = Flask(__name__)
 
+# Root Endpoint
+@app.route('/')
+def home():
+    return "Welcome to the Prediction API! Use the '/predict' endpoint for predictions."
+
+# Prediction Endpoint
 @app.route('/predict', methods=['POST'])
 def predict():
-    data = request.get_json()
-    gid = data.get('GID')
-    bet_amount = data.get('BetAmount')
+    try:
+        # Parse incoming JSON data
+        data = request.get_json()
+        gid = data.get('GID')
+        bet_amount = data.get('BetAmount')
+        
+        if not gid or not bet_amount:
+            return jsonify({'error': 'Both GID and BetAmount are required'}), 400
+        
+        # Calculate features
+        gid_entropy = calculate_entropy(gid)
+        gid_length = len(gid)
+        current_time = datetime.utcnow()
+        day = current_time.day
+        hour = current_time.hour
+        minute = current_time.minute
+        second = current_time.second
+        time_weight = (hour * 0.5) + (minute * 0.3) + (second * 0.2)
+        
+        # Prepare input data for prediction
+        input_features = pd.DataFrame({
+            'BetAmount': [bet_amount],
+            'GID_Entropy': [gid_entropy],
+            'GID_Length': [gid_length],
+            'Day': [day],
+            'Hour': [hour],
+            'Minute': [minute],
+            'Second': [second],
+            'TimeWeight': [time_weight]
+        })
+        
+        # Make prediction
+        predicted_class = model.predict(input_features)[0]
+        result = predicted_class
+        
+        return jsonify({
+            'GID': gid,
+            'BetAmount': bet_amount,
+            'Day': day,
+            'Hour': hour,
+            'Minute': minute,
+            'Second': second,
+            'TimeWeight': time_weight,
+            'PrimaryResult': result
+        })
     
-    if not gid or not bet_amount:
-        return jsonify({'error': 'Both GID and BetAmount are required'}), 400
-    
-    # Calculate features
-    gid_entropy = calculate_entropy(gid)
-    gid_length = len(gid)
-    current_time = datetime.utcnow()
-    day = current_time.day
-    hour = current_time.hour
-    minute = current_time.minute
-    second = current_time.second
-    time_weight = (hour * 0.5) + (minute * 0.3) + (second * 0.2)
-    
-    # Prepare input data
-    input_features = pd.DataFrame({
-        'BetAmount': [bet_amount],
-        'GID_Entropy': [gid_entropy],
-        'GID_Length': [gid_length],
-        'Day': [day],
-        'Hour': [hour],
-        'Minute': [minute],
-        'Second': [second],
-        'TimeWeight': [time_weight]
-    })
-    
-    # Make prediction
-    predicted_class = model.predict(input_features)[0]
-    result = predicted_class
-    
-    return jsonify({
-        'GID': gid,
-        'BetAmount': bet_amount,
-        'Day': day,
-        'Hour': hour,
-        'Minute': minute,
-        'Second': second,
-        'TimeWeight': time_weight,
-        'PrimaryResult': result
-    })
+    except Exception as e:
+        print("❌ Error during prediction:", e)
+        print(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
 
+# Debug Mode (Run Locally)
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+    app.run(host='0.0.0.0', port=8080, debug=True)
